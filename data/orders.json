@@ -1,0 +1,106 @@
+[
+    {
+        "id": "order_001",
+        "company_id": "comp_001",
+        "amount": 15200.0,
+        "order_date": "2024-06-25T10:00:00Z",
+        "products": [
+            "Product A",
+            "Product B"
+        ],
+        "comment": "Perfect match - close to deal_001 in time and value"
+    },
+    {
+        "id": "order_002",
+        "company_id": "comp_002",
+        "amount": 8700.0,
+        "order_date": "2024-08-10T14:30:00Z",
+        "products": [
+            "Product C"
+        ],
+        "comment": "Good match - close to deal_002"
+    },
+    {
+        "id": "order_003",
+        "company_id": "comp_003",
+        "amount": 24500.0,
+        "order_date": "2024-08-20T09:15:00Z",
+        "products": [
+            "Product D",
+            "Product E"
+        ],
+        "comment": "Good match - close to deal_003"
+    },
+    {
+        "id": "order_004",
+        "company_id": "comp_005",
+        "amount": 350.0,
+        "order_date": "2024-09-05T11:00:00Z",
+        "products": [
+            "Product F"
+        ],
+        "comment": "Self-service - low value, no deals for this company"
+    },
+    {
+        "id": "order_005",
+        "company_id": "comp_001",
+        "amount": 11800.0,
+        "order_date": "2024-09-15T16:00:00Z",
+        "products": [
+            "Product A",
+            "Product G"
+        ],
+        "comment": "Should match deal_005 - recent deal by Bob"
+    },
+    {
+        "id": "order_006",
+        "company_id": "comp_004",
+        "amount": 52000.0,
+        "order_date": "2024-05-25T10:00:00Z",
+        "products": [
+            "Product H"
+        ],
+        "comment": "Match deal_004 but value differs slightly"
+    },
+    {
+        "id": "order_007",
+        "company_id": "comp_002",
+        "amount": 200.0,
+        "order_date": "2024-09-20T12:00:00Z",
+        "products": [
+            "Product I"
+        ],
+        "comment": "Self-service - very low value"
+    },
+    {
+        "id": "order_008",
+        "company_id": "comp_004",
+        "amount": 46000.0,
+        "order_date": "2024-10-15T14:00:00Z",
+        "products": [
+            "Product J",
+            "Product K"
+        ],
+        "comment": "Should match deal_007 - recent Charlie deal"
+    },
+    {
+        "id": "order_009",
+        "company_id": "comp_001",
+        "amount": 18000.0,
+        "order_date": "2024-12-01T10:00:00Z",
+        "products": [
+            "Product L"
+        ],
+        "comment": "Edge case - far from deal_005, might need review"
+    },
+    {
+        "id": "order_010",
+        "company_id": "comp_003",
+        "amount": 30000.0,
+        "order_date": "2024-11-15T09:00:00Z",
+        "products": [
+            "Product M"
+        ],
+        "comment": "Value differs from deal_003, temporal match only"
+    }
+]

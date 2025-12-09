@@ -1,0 +1,66 @@
+{
+    "companies": [
+        {
+            "id": "comp_001",
+            "name": "TechCorp Solutions",
+            "created_at": "2024-01-15T10:00:00Z"
+        },
+        {
+            "id": "comp_002",
+            "name": "Digital Innovations Ltd",
+            "created_at": "2024-02-01T09:30:00Z"
+        }
+    ],
+    "deals": [
+        {
+            "id": "deal_001",
+            "company_id": "comp_001",
+            "sales_rep_id": "rep_alice",
+            "sales_rep_name": "Alice Johnson",
+            "amount": 15000.0,
+            "status": "Won",
+            "close_date": "2024-06-15T16:30:00Z",
+            "created_at": "2024-05-01T10:00:00Z"
+        },
+        {
+            "id": "deal_002",
+            "company_id": "comp_002",
+            "sales_rep_id": "rep_bob",
+            "sales_rep_name": "Bob Smith",
+            "amount": 8500.0,
+            "status": "Won",
+            "close_date": "2024-07-20T14:00:00Z",
+            "created_at": "2024-06-10T09:00:00Z"
+        }
+    ],
+    "orders": [
+        {
+            "id": "order_001",
+            "company_id": "comp_001",
+            "amount": 15200.0,
+            "order_date": "2024-06-25T10:00:00Z",
+            "products": [
+                "Product A",
+                "Product B"
+            ]
+        },
+        {
+            "id": "order_002",
+            "company_id": "comp_002",
+            "amount": 8700.0,
+            "order_date": "2024-08-10T14:30:00Z",
+            "products": [
+                "Product C"
+            ]
+        },
+        {
+            "id": "order_003",
+            "company_id": "comp_001",
+            "amount": 350.0,
+            "order_date": "2024-09-05T11:00:00Z",
+            "products": [
+                "Product D"
+            ]
+        }
+    ]
+}

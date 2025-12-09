@@ -1,0 +1,271 @@
+{
+    "name": "SatispayFlow - Order Attribution",
+    "nodes": [
+        {
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {
+                            "field": "cronExpression",
+                            "expression": "0 */6 * * *"
+                        }
+                    ]
+                }
+            },
+            "name": "Schedule Trigger",
+            "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1,
+            "position": [
+                250,
+                300
+            ],
+            "notes": "Runs every 6 hours to process new orders"
+        },
+        {
+            "parameters": {
+                "url": "http://localhost:8000/health",
+                "options": {}
+            },
+            "name": "Check API Health",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                450,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "string": [
+                        {
+                            "value1": "={{$json.status}}",
+                            "operation": "equals",
+                            "value2": "healthy"
+                        }
+                    ]
+                }
+            },
+            "name": "API Healthy?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 1,
+            "position": [
+                650,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "content": "## Fetch CRM Data\n\nIn production, this would:\n1. Connect to your CRM (HubSpot, Salesforce, etc.)\n2. Fetch Companies, Deals (Won status), and Orders\n3. Filter for unmatched orders only\n\nFor demo: Load from JSON files or Google Sheets",
+                "height": 200,
+                "width": 300
+            },
+            "name": "Note - CRM Integration",
+            "type": "n8n-nodes-base.stickyNote",
+            "typeVersion": 1,
+            "position": [
+                850,
+                100
+            ]
+        },
+        {
+            "parameters": {
+                "url": "=http://localhost:8000/match-orders",
+                "method": "POST",
+                "sendBody": true,
+                "bodyParameters": {
+                    "parameters": [
+                        {
+                            "name": "companies",
+                            "value": "={{$json.companies}}"
+                        },
+                        {
+                            "name": "deals",
+                            "value": "={{$json.deals}}"
+                        },
+                        {
+                            "name": "orders",
+                            "value": "={{$json.orders}}"
+                        }
+                    ]
+                },
+                "options": {}
+            },
+            "name": "Call Matching API",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                850,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "number": [
+                        {
+                            "value1": "={{$json.summary.matched_count}}",
+                            "operation": "larger",
+                            "value2": 0
+                        }
+                    ]
+                }
+            },
+            "name": "Has Matches?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 1,
+            "position": [
+                1050,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "functionCode": "// Process matched orders for CRM update\nconst matched = $input.first().json.matched;\n\nreturn matched.map(attr => ({\n  json: {\n    order_id: attr.order_id,\n    deal_id: attr.deal_id,\n    sales_rep_id: attr.sales_rep_id,\n    sales_rep_name: attr.sales_rep_name,\n    confidence_score: attr.confidence_score,\n    attribution_method: attr.attribution_method,\n    action: 'update_crm'\n  }\n}));"
+            },
+            "name": "Process Matched",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 1,
+            "position": [
+                1250,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "functionCode": "// Process orders needing review\nconst needsReview = $input.first().json.needs_review;\n\nreturn needsReview.map(attr => ({\n  json: {\n    order_id: attr.order_id,\n    deal_id: attr.deal_id,\n    sales_rep_name: attr.sales_rep_name,\n    confidence_score: attr.confidence_score,\n    metadata: attr.matching_metadata,\n    action: 'send_for_review'\n  }\n}));"
+            },
+            "name": "Process Review Queue",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 1,
+            "position": [
+                1250,
+                400
+            ]
+        },
+        {
+            "parameters": {
+                "content": "## Update CRM\n\nFor each matched order:\n1. Update Order record with Deal ID\n2. Update Order with Sales Rep ID\n3. Mark as 'Attributed'\n4. Trigger commission calculation",
+                "height": 150,
+                "width": 250
+            },
+            "name": "Note - Update CRM",
+            "type": "n8n-nodes-base.stickyNote",
+            "typeVersion": 1,
+            "position": [
+                1450,
+                100
+            ]
+        },
+        {
+            "parameters": {
+                "content": "## Send for Review\n\n1. Create task in CRM\n2. Assign to Sales Manager\n3. Send Slack/Email notification\n4. Include matching metadata",
+                "height": 150,
+                "width": 250
+            },
+            "name": "Note - Review Process",
+            "type": "n8n-nodes-base.stickyNote",
+            "typeVersion": 1,
+            "position": [
+                1450,
+                350
+            ]
+        },
+        {
+            "parameters": {
+                "functionCode": "const summary = $input.first().json.summary;\n\nreturn [{\n  json: {\n    message: `Attribution Complete`,\n    total_orders: summary.total_orders,\n    matched: summary.matched_count,\n    self_service: summary.self_service_count,\n    needs_review: summary.needs_review_count,\n    match_rate: summary.match_rate_percent + '%',\n    avg_confidence: summary.average_confidence + '%'\n  }\n}];"
+            },
+            "name": "Create Summary Report",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 1,
+            "position": [
+                1250,
+                600
+            ]
+        },
+        {
+            "parameters": {
+                "content": "## Notification\n\nSend summary report via:\n- Email to Sales Team\n- Slack channel\n- Dashboard update",
+                "height": 120,
+                "width": 200
+            },
+            "name": "Note - Notifications",
+            "type": "n8n-nodes-base.stickyNote",
+            "typeVersion": 1,
+            "position": [
+                1450,
+                570
+            ]
+        }
+    ],
+    "connections": {
+        "Schedule Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Check API Health",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Check API Health": {
+            "main": [
+                [
+                    {
+                        "node": "API Healthy?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "API Healthy?": {
+            "main": [
+                [
+                    {
+                        "node": "Call Matching API",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Call Matching API": {
+            "main": [
+                [
+                    {
+                        "node": "Has Matches?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Has Matches?": {
+            "main": [
+                [
+                    {
+                        "node": "Process Matched",
+                        "type": "main",
+                        "index": 0
+                    },
+                    {
+                        "node": "Process Review Queue",
+                        "type": "main",
+                        "index": 0
+                    },
+                    {
+                        "node": "Create Summary Report",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {
+        "executionOrder": "v1"
+    }
+}

@@ -1,0 +1,27 @@
+[
+    {
+        "id": "comp_001",
+        "name": "TechCorp Solutions",
+        "created_at": "2024-01-15T10:00:00Z"
+    },
+    {
+        "id": "comp_002",
+        "name": "Digital Innovations Ltd",
+        "created_at": "2024-02-01T09:30:00Z"
+    },
+    {
+        "id": "comp_003",
+        "name": "StartupHub Inc",
+        "created_at": "2024-03-10T14:20:00Z"
+    },
+    {
+        "id": "comp_004",
+        "name": "Enterprise Global",
+        "created_at": "2024-01-05T11:00:00Z"
+    },
+    {
+        "id": "comp_005",
+        "name": "SmallBiz Store",
+        "created_at": "2024-04-01T08:00:00Z"
+    }
+]
