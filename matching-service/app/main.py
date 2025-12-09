@@ -1,49 +1,42 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from loguru import logger
-import sys
+from typing import Dict
+from datetime import datetime
 
-from .models import MatchRequest, MatchResponse, MatchConfig, Attribution
-from .matching_engine import MatchingEngine
-from .config import get_settings
-from .utils import create_summary_stats
-
-# Configure logging
-logger.remove()
-logger.add(
-    sys.stdout,
-    format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>",
-    level="INFO"
-)
+from .models import MatchRequest, MatchResponse, Attribution
+from .matching_engine import MatchingEngine, MatchingConfig
 
 # Initialize FastAPI app
-settings = get_settings()
 app = FastAPI(
-    title=settings.app_name,
-    version=settings.app_version,
-    description="Automated Deal-to-Order attribution system for Sales Rep commission tracking"
+    title="SatispayFlow Matching Service",
+    description="Automated Deal-to-Order attribution system for Sales Rep commission tracking",
+    version="1.0.0"
 )
 
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify actual origins
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Initialize matching engine
+matching_engine = MatchingEngine()
 
 
 @app.get("/")
 async def root():
     """Root endpoint with API information"""
     return {
-        "name": settings.app_name,
-        "version": settings.app_version,
+        "service": "SatispayFlow Matching Service",
+        "version": "1.0.0",
         "status": "running",
         "endpoints": {
-            "match_orders": "/match-orders",
             "health": "/health",
+            "match_orders": "/match-orders",
+            "config": "/config",
             "docs": "/docs"
         }
     }
@@ -52,10 +45,10 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    from datetime import datetime
     return {
         "status": "healthy",
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat(),
+        "service": "matching-service"
     }
 
 
@@ -70,33 +63,44 @@ async def match_orders(request: MatchRequest):
     - needs_review: Low confidence matches requiring manual review
     """
     try:
-        logger.info(f"Received match request: {len(request.orders)} orders, {len(request.deals)} deals")
-        
-        # Create matching config from settings
-        config = MatchConfig(
-            time_window_days=settings.time_window_days,
-            value_tolerance_percent=settings.value_tolerance_percent,
-            self_service_threshold=settings.self_service_threshold,
-            confidence_threshold=settings.confidence_threshold,
-            temporal_decay_per_day=settings.temporal_decay_per_day,
-            value_penalty_per_5_percent=settings.value_penalty_per_5_percent,
-            unique_deal_bonus=settings.unique_deal_bonus
-        )
-        
-        # Initialize matching engine
-        engine = MatchingEngine(config)
-        
         # Perform matching
-        matched, self_service, needs_review = engine.match_orders(
-            companies=request.companies,
+        matched, self_service, needs_review = matching_engine.match_orders(
+            orders=request.orders,
             deals=request.deals,
-            orders=request.orders
+            companies=request.companies
         )
         
-        # Create summary statistics
-        summary = create_summary_stats(matched, self_service, needs_review)
+        # Calculate summary statistics
+        total_orders = len(request.orders)
+        matched_count = len(matched)
+        self_service_count = len(self_service)
+        needs_review_count = len(needs_review)
         
-        logger.info(f"Matching complete: {summary}")
+        # Calculate match rate
+        match_rate = (matched_count / total_orders * 100) if total_orders > 0 else 0
+        
+        # Calculate average confidence for matched orders
+        avg_confidence = (
+            sum(a.confidence_score for a in matched) / matched_count
+            if matched_count > 0 else 0
+        )
+        
+        # Count attribution methods
+        all_attributions = matched + self_service + needs_review
+        attribution_methods = {}
+        for attr in all_attributions:
+            method = attr.attribution_method.value
+            attribution_methods[method] = attribution_methods.get(method, 0) + 1
+        
+        summary = {
+            "total_orders": total_orders,
+            "matched_count": matched_count,
+            "self_service_count": self_service_count,
+            "needs_review_count": needs_review_count,
+            "match_rate_percent": round(match_rate, 2),
+            "average_confidence": round(avg_confidence, 2),
+            "attribution_methods": attribution_methods
+        }
         
         return MatchResponse(
             matched=matched,
@@ -106,8 +110,7 @@ async def match_orders(request: MatchRequest):
         )
     
     except Exception as e:
-        logger.error(f"Error during matching: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Matching failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Matching error: {str(e)}")
 
 
 @app.get("/attribution/{order_id}")
@@ -118,25 +121,34 @@ async def get_attribution(order_id: str):
     Note: This is a placeholder endpoint. In production, this would
     query a database to retrieve stored attribution results.
     """
-    # TODO: Implement database lookup
     return {
-        "message": "This endpoint would retrieve attribution from database",
+        "message": "Attribution lookup not implemented",
         "order_id": order_id,
-        "note": "Not yet implemented - use /match-orders for batch processing"
+        "note": "In production, this would query a database"
     }
 
 
 @app.get("/config")
 async def get_config():
     """Get current matching configuration"""
+    config = matching_engine.config
     return {
-        "time_window_days": settings.time_window_days,
-        "value_tolerance_percent": settings.value_tolerance_percent,
-        "self_service_threshold": settings.self_service_threshold,
-        "confidence_threshold": settings.confidence_threshold,
-        "temporal_decay_per_day": settings.temporal_decay_per_day,
-        "value_penalty_per_5_percent": settings.value_penalty_per_5_percent,
-        "unique_deal_bonus": settings.unique_deal_bonus
+        "temporal_matching": {
+            "max_days_before_order": config.MAX_DAYS_BEFORE_ORDER,
+            "max_days_after_order": config.MAX_DAYS_AFTER_ORDER
+        },
+        "value_matching": {
+            "tolerance_percent": config.VALUE_TOLERANCE_PERCENT
+        },
+        "confidence": {
+            "review_threshold": config.CONFIDENCE_THRESHOLD_REVIEW
+        },
+        "self_service": {
+            "amount_threshold": config.SELF_SERVICE_AMOUNT_THRESHOLD
+        },
+        "fuzzy_matching": {
+            "company_name_similarity_threshold": config.COMPANY_NAME_SIMILARITY_THRESHOLD
+        }
     }
 
 

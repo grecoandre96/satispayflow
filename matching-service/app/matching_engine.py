@@ -1,262 +1,316 @@
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta
-import pandas as pd
-from loguru import logger
+from difflib import SequenceMatcher
+from .models import (
+    Order, Deal, Company, Attribution, 
+    AttributionMethod, DealStatus
+)
 
-from .models import Company, Deal, Order, Attribution, MatchConfig
+
+class MatchingConfig:
+    """Configuration for matching algorithm"""
+    # Temporal matching
+    MAX_DAYS_BEFORE_ORDER = 90  # Deal can be up to 90 days before order
+    MAX_DAYS_AFTER_ORDER = 30   # Deal can be up to 30 days after order
+    
+    # Value matching
+    VALUE_TOLERANCE_PERCENT = 20.0  # 20% tolerance for amount differences
+    
+    # Confidence scoring
+    CONFIDENCE_THRESHOLD_REVIEW = 70.0  # Below this, needs manual review
+    
+    # Self-service thresholds
+    SELF_SERVICE_AMOUNT_THRESHOLD = 500.0  # Orders below this are self-service
+    
+    # Fuzzy matching
+    COMPANY_NAME_SIMILARITY_THRESHOLD = 0.6  # 60% similarity for company names
 
 
 class MatchingEngine:
-    """
-    Core matching engine for attributing Orders to Deals
+    """Engine for matching orders to deals"""
     
-    Uses multi-level matching strategy:
-    1. Temporal + Value match (highest confidence)
-    2. Temporal only match (medium confidence)
-    3. Self-service detection (no sales rep)
-    """
-    
-    def __init__(self, config: MatchConfig):
-        self.config = config
-        logger.info(f"MatchingEngine initialized with config: {config.dict()}")
+    def __init__(self, config: MatchingConfig = None):
+        self.config = config or MatchingConfig()
     
     def match_orders(
-        self,
-        companies: List[Company],
+        self, 
+        orders: List[Order], 
         deals: List[Deal],
-        orders: List[Order]
+        companies: List[Company]
     ) -> Tuple[List[Attribution], List[Attribution], List[Attribution]]:
         """
-        Match orders to deals and return categorized results
+        Match orders to deals using multi-level matching logic
         
         Returns:
-            Tuple of (matched, self_service, needs_review)
+            - matched: High confidence matches
+            - self_service: Orders without sales rep involvement
+            - needs_review: Low confidence matches
         """
-        logger.info(f"Starting matching: {len(orders)} orders, {len(deals)} deals, {len(companies)} companies")
-        
-        # Convert to DataFrames for easier manipulation
-        df_deals = pd.DataFrame([d.dict() for d in deals])
-        df_orders = pd.DataFrame([o.dict() for o in orders])
-        
-        # Filter only Won deals
-        df_deals = df_deals[df_deals['status'] == 'Won'].copy()
-        logger.info(f"Filtered to {len(df_deals)} Won deals")
-        
         matched = []
         self_service = []
         needs_review = []
         
-        for order in orders:
-            attribution = self._match_single_order(order, df_deals)
-            
-            if attribution.attribution_method == "self_service":
-                self_service.append(attribution)
-            elif attribution.needs_review:
-                needs_review.append(attribution)
-            else:
-                matched.append(attribution)
+        # Create lookup dictionaries
+        company_dict = {c.id: c for c in companies}
         
-        logger.info(f"Matching complete: {len(matched)} matched, {len(self_service)} self-service, {len(needs_review)} need review")
+        # Filter only Won deals
+        won_deals = [d for d in deals if d.status == DealStatus.WON]
+        
+        for order in orders:
+            # Check self-service threshold
+            if order.amount < self.config.SELF_SERVICE_AMOUNT_THRESHOLD:
+                self_service.append(self._create_self_service_attribution(
+                    order, 
+                    reason="Order amount below self-service threshold"
+                ))
+                continue
+            
+            # Find candidate deals
+            candidates = self._find_candidate_deals(order, won_deals, company_dict)
+            
+            if not candidates:
+                # No matches found
+                self_service.append(self._create_self_service_attribution(
+                    order,
+                    reason="No suitable deal match found within time window"
+                ))
+                continue
+            
+            # Score and select best match
+            best_match = self._select_best_match(order, candidates, company_dict)
+            
+            if best_match.confidence_score >= self.config.CONFIDENCE_THRESHOLD_REVIEW:
+                matched.append(best_match)
+            else:
+                needs_review.append(best_match)
         
         return matched, self_service, needs_review
     
-    def _match_single_order(self, order: Order, df_deals: pd.DataFrame) -> Attribution:
-        """Match a single order to the best deal"""
-        
-        # Check if self-service (low value)
-        if order.amount < self.config.self_service_threshold:
-            return self._create_self_service_attribution(
-                order,
-                reason="Order amount below self-service threshold"
-            )
-        
-        # Get deals for this company
-        company_deals = df_deals[df_deals['company_id'] == order.company_id].copy()
-        
-        if len(company_deals) == 0:
-            return self._create_self_service_attribution(
-                order,
-                reason="No Won deals found for this company"
-            )
-        
-        # Filter deals that closed before the order
-        company_deals = company_deals[
-            company_deals['close_date'] < order.order_date
-        ].copy()
-        
-        if len(company_deals) == 0:
-            return self._create_self_service_attribution(
-                order,
-                reason="No Won deals found before order date"
-            )
-        
-        # Try Level 1: Temporal + Value match
-        best_match = self._find_temporal_value_match(order, company_deals)
-        if best_match is not None:
-            return best_match
-        
-        # Try Level 2: Temporal only match
-        best_match = self._find_temporal_match(order, company_deals)
-        if best_match is not None:
-            return best_match
-        
-        # No good match found
-        return self._create_self_service_attribution(
-            order,
-            reason="No suitable deal match found within time window"
-        )
-    
-    def _find_temporal_value_match(
-        self,
-        order: Order,
-        company_deals: pd.DataFrame
-    ) -> Optional[Attribution]:
-        """Level 1: Match based on time proximity AND value similarity"""
-        
+    def _find_candidate_deals(
+        self, 
+        order: Order, 
+        deals: List[Deal],
+        company_dict: Dict[str, Company]
+    ) -> List[Deal]:
+        """Find all deals that could potentially match this order"""
         candidates = []
         
-        for _, deal in company_deals.iterrows():
-            # Check time window
-            days_diff = (order.order_date - deal['close_date']).days
-            if days_diff > self.config.time_window_days or days_diff < 0:
+        order_company = company_dict.get(order.company_id)
+        
+        for deal in deals:
+            # Skip if no close date
+            if not deal.close_date:
                 continue
             
-            # Check value similarity
-            value_diff_percent = abs(order.amount - deal['amount']) / deal['amount'] * 100
-            if value_diff_percent > self.config.value_tolerance_percent:
+            # Temporal filter
+            days_diff = (order.order_date - deal.close_date).days
+            if not (-self.config.MAX_DAYS_BEFORE_ORDER <= days_diff <= self.config.MAX_DAYS_AFTER_ORDER):
                 continue
             
-            # Calculate confidence score
-            score = self._calculate_confidence_score(
-                order,
-                deal,
-                days_diff,
-                value_diff_percent,
-                len(company_deals)
-            )
+            # Value filter
+            value_diff_percent = abs(order.amount - deal.amount) / deal.amount * 100
+            if value_diff_percent > self.config.VALUE_TOLERANCE_PERCENT:
+                continue
             
-            candidates.append({
-                'deal': deal,
-                'score': score,
-                'days_diff': days_diff,
-                'value_diff_percent': value_diff_percent
-            })
+            # Company matching - three strategies:
+            # 1. Exact company_id match
+            if order.company_id == deal.company_id:
+                candidates.append(deal)
+                continue
+            
+            # 2. Fuzzy company name match (for new companies)
+            if order_company:
+                deal_company = company_dict.get(deal.company_id)
+                if deal_company:
+                    similarity = self._calculate_company_similarity(
+                        order_company.name, 
+                        deal_company.name
+                    )
+                    if similarity >= self.config.COMPANY_NAME_SIMILARITY_THRESHOLD:
+                        candidates.append(deal)
+                        continue
+            
+            # 3. Amount-based matching (if company is new but amount matches closely)
+            if value_diff_percent <= 5.0:  # Very close amount match
+                candidates.append(deal)
         
-        if not candidates:
-            return None
+        return candidates
+    
+    def _calculate_company_similarity(self, name1: str, name2: str) -> float:
+        """Calculate similarity between two company names"""
+        # Normalize names
+        n1 = name1.lower().strip()
+        n2 = name2.lower().strip()
         
-        # Get best candidate
-        best = max(candidates, key=lambda x: x['score'])
-        deal = best['deal']
+        # Use SequenceMatcher for fuzzy matching
+        return SequenceMatcher(None, n1, n2).ratio()
+    
+    def _select_best_match(
+        self, 
+        order: Order, 
+        candidates: List[Deal],
+        company_dict: Dict[str, Company]
+    ) -> Attribution:
+        """Select the best matching deal from candidates"""
+        if len(candidates) == 1:
+            return self._create_attribution(order, candidates[0], company_dict)
         
-        return Attribution(
-            order_id=order.id,
-            deal_id=deal['id'],
-            sales_rep_id=deal['sales_rep_id'],
-            sales_rep_name=deal['sales_rep_name'],
-            attribution_method="temporal_value",
-            confidence_score=best['score'],
-            needs_review=best['score'] < self.config.confidence_threshold,
-            matching_metadata={
-                'days_difference': int(best['days_diff']),
-                'value_difference_percent': round(best['value_diff_percent'], 2),
-                'order_amount': order.amount,
-                'deal_amount': float(deal['amount']),
-                'candidates_count': len(candidates)
-            }
+        # Score each candidate
+        scored_candidates = []
+        for deal in candidates:
+            score = self._calculate_match_score(order, deal, company_dict)
+            scored_candidates.append((deal, score))
+        
+        # Sort by score (descending)
+        scored_candidates.sort(key=lambda x: x[1], reverse=True)
+        
+        # Return best match
+        best_deal, best_score = scored_candidates[0]
+        return self._create_attribution(
+            order, 
+            best_deal, 
+            company_dict,
+            custom_confidence=best_score
         )
     
-    def _find_temporal_match(
-        self,
-        order: Order,
-        company_deals: pd.DataFrame
-    ) -> Optional[Attribution]:
-        """Level 2: Match based on time proximity only (most recent deal)"""
-        
-        # Filter by time window
-        max_date = order.order_date - timedelta(days=self.config.time_window_days)
-        recent_deals = company_deals[company_deals['close_date'] >= max_date].copy()
-        
-        if len(recent_deals) == 0:
-            return None
-        
-        # Get most recent deal
-        recent_deals = recent_deals.sort_values('close_date', ascending=False)
-        deal = recent_deals.iloc[0]
-        
-        days_diff = (order.order_date - deal['close_date']).days
-        value_diff_percent = abs(order.amount - deal['amount']) / deal['amount'] * 100
-        
-        score = self._calculate_confidence_score(
-            order,
-            deal,
-            days_diff,
-            value_diff_percent,
-            len(company_deals)
-        )
-        
-        # Penalize temporal-only matches
-        score = score * 0.8  # 20% penalty for not matching value
-        
-        return Attribution(
-            order_id=order.id,
-            deal_id=deal['id'],
-            sales_rep_id=deal['sales_rep_id'],
-            sales_rep_name=deal['sales_rep_name'],
-            attribution_method="temporal_only",
-            confidence_score=score,
-            needs_review=True,  # Always flag temporal-only for review
-            matching_metadata={
-                'days_difference': int(days_diff),
-                'value_difference_percent': round(value_diff_percent, 2),
-                'order_amount': order.amount,
-                'deal_amount': float(deal['amount']),
-                'reason': 'Temporal match only - value differs significantly'
-            }
-        )
-    
-    def _calculate_confidence_score(
-        self,
-        order: Order,
-        deal: pd.Series,
-        days_diff: int,
-        value_diff_percent: float,
-        total_deals: int
+    def _calculate_match_score(
+        self, 
+        order: Order, 
+        deal: Deal,
+        company_dict: Dict[str, Company]
     ) -> float:
-        """Calculate confidence score for a match"""
+        """
+        Calculate confidence score for a match
         
-        score = 100.0
+        New scoring system (total 100 points):
+        - Product match: 50 points (most important)
+        - Amount match: 30 points (second most important)
+        - Temporal proximity: 15 points
+        - Company match: 5 points (least important since products/amount are better indicators)
+        """
+        score = 0.0
         
-        # Temporal penalty: -1 point per day
-        score -= days_diff * self.config.temporal_decay_per_day
+        # Product match score (50 points max) - HIGHEST PRIORITY
+        if order.products and deal.products:
+            # Calculate product overlap
+            order_products_set = set(p.lower().strip() for p in order.products)
+            deal_products_set = set(p.lower().strip() for p in deal.products)
+            
+            if order_products_set and deal_products_set:
+                # Calculate Jaccard similarity (intersection / union)
+                intersection = len(order_products_set & deal_products_set)
+                union = len(order_products_set | deal_products_set)
+                product_similarity = intersection / union if union > 0 else 0
+                score += product_similarity * 50.0
+        elif not order.products and not deal.products:
+            # If neither has products, give neutral score
+            score += 25.0
+        # If only one has products, give 0 points (mismatch)
         
-        # Value penalty: -10 points per 5% difference
-        score -= (value_diff_percent / 5.0) * self.config.value_penalty_per_5_percent
+        # Value match score (30 points max) - SECOND PRIORITY
+        value_diff_percent = abs(order.amount - deal.amount) / deal.amount * 100
+        if value_diff_percent <= 1.0:
+            # Perfect match (within 1%)
+            value_score = 30.0
+        elif value_diff_percent <= 5.0:
+            # Excellent match (within 5%)
+            value_score = 25.0
+        elif value_diff_percent <= 10.0:
+            # Good match (within 10%)
+            value_score = 20.0
+        elif value_diff_percent <= 15.0:
+            # Acceptable match (within 15%)
+            value_score = 15.0
+        else:
+            # Poor match - linear decay
+            value_score = max(0, 30 - (value_diff_percent * 1.5))
+        score += value_score
         
-        # Bonus if this is the only deal in the period
-        if total_deals == 1:
-            score += self.config.unique_deal_bonus
+        # Temporal proximity score (15 points max)
+        if deal.close_date:
+            days_diff = abs((order.order_date - deal.close_date).days)
+            if days_diff <= 7:
+                temporal_score = 15.0
+            elif days_diff <= 14:
+                temporal_score = 12.0
+            elif days_diff <= 30:
+                temporal_score = 8.0
+            else:
+                temporal_score = max(0, 15 - (days_diff / 6))  # Lose 1 point per 6 days
+            score += temporal_score
         
-        # Ensure score is in valid range
-        return max(0.0, min(100.0, score))
+        # Company match score (5 points max) - LOWEST PRIORITY
+        if order.company_id == deal.company_id:
+            score += 5.0
+        else:
+            order_company = company_dict.get(order.company_id)
+            deal_company = company_dict.get(deal.company_id)
+            if order_company and deal_company:
+                similarity = self._calculate_company_similarity(
+                    order_company.name,
+                    deal_company.name
+                )
+                score += similarity * 5.0
+        
+        return min(100.0, score)
+    
+    def _create_attribution(
+        self, 
+        order: Order, 
+        deal: Deal,
+        company_dict: Dict[str, Company],
+        custom_confidence: Optional[float] = None
+    ) -> Attribution:
+        """Create an attribution object for a matched order"""
+        days_diff = abs((order.order_date - deal.close_date).days) if deal.close_date else 0
+        value_diff_percent = abs(order.amount - deal.amount) / deal.amount * 100
+        
+        # Calculate confidence if not provided
+        if custom_confidence is None:
+            confidence = self._calculate_match_score(order, deal, company_dict)
+        else:
+            confidence = custom_confidence
+        
+        # Determine attribution method
+        if value_diff_percent <= 5.0 and days_diff <= 14:
+            method = AttributionMethod.TEMPORAL_VALUE
+        else:
+            method = AttributionMethod.TEMPORAL_ONLY
+        
+        return Attribution(
+            order_id=order.id,
+            deal_id=deal.id,
+            sales_rep_id=deal.sales_rep_id,
+            sales_rep_name=deal.sales_rep_name,
+            attribution_method=method,
+            confidence_score=confidence,
+            needs_review=confidence < self.config.CONFIDENCE_THRESHOLD_REVIEW,
+            matching_metadata={
+                "days_difference": days_diff,
+                "value_difference_percent": round(value_diff_percent, 2),
+                "order_amount": order.amount,
+                "deal_amount": deal.amount,
+                "candidates_count": 1,
+                "company_match": order.company_id == deal.company_id
+            }
+        )
     
     def _create_self_service_attribution(
-        self,
-        order: Order,
+        self, 
+        order: Order, 
         reason: str
     ) -> Attribution:
-        """Create a self-service attribution (no sales rep)"""
-        
+        """Create a self-service attribution"""
         return Attribution(
             order_id=order.id,
             deal_id=None,
             sales_rep_id=None,
             sales_rep_name=None,
-            attribution_method="self_service",
-            confidence_score=100.0,  # High confidence it's self-service
+            attribution_method=AttributionMethod.SELF_SERVICE,
+            confidence_score=100.0,
             needs_review=False,
             matching_metadata={
-                'reason': reason,
-                'order_amount': order.amount
+                "reason": reason,
+                "order_amount": order.amount
             }
         )

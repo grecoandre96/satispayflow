@@ -7,16 +7,23 @@ __pycache__/
 venv/
 env/
 ENV/
-.venv
-*.egg-info/
-dist/
 build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Environment
-.env
-.env.local
-
-# IDE
+# IDEs
 .vscode/
 .idea/
 *.swp
@@ -27,22 +34,14 @@ build/
 .DS_Store
 Thumbs.db
 
-# Logs
-*.log
-logs/
+# Environment
+.env
+.env.local
 
 # Testing
 .pytest_cache/
 .coverage
 htmlcov/
 
-# Data (keep structure, ignore content)
-data/attributions.json
-
-# Docker
-*.pid
-*.seed
-*.pid.lock
-
-# n8n
-n8n_data/
+# Logs
+*.log
