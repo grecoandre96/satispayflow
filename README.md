@@ -33,9 +33,3 @@ uvicorn app.main:app --reload
 ```
 
 Visit http://localhost:8000/docs for interactive API documentation.
-
-## Testing
-
-```bash
-python test_matching.py
-```
